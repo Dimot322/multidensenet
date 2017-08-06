@@ -1,5 +1,6 @@
 cifar
 *.pth
+*.pyc
 __pycache__
 *.t7
 work

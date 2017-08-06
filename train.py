@@ -27,47 +27,51 @@ import setproctitle
 import densenet
 import make_graph
 
-IMG_PATH = os.path.join('input', 'JPEGImages')
-TRAIN_DATA = os.path.join('input', 'train.csv')
-TEST_DATA = os.path.join('input', 'test.csv')
+IMG_PATH = os.path.join('input', 'collage-23')
+TEST_IMG_PATH = os.path.join('input', 'test-collage-23', 'images')
+TRAIN_DATA = os.path.join('input', 'collage-23.csv')
+VAL_DATA = os.path.join('input', 'val.csv')
+TEST_DATA = os.path.join('input', 'test-collage-23', 'test.csv')
+thresh = 0.5
 
 def main():
     parser = argparse.ArgumentParser()
-    # parser.add_argument('--batchSz', type=int, default=64)
-    parser.add_argument('--batchSz', type=int, default=32)
-    # parser.add_argument('--nEpochs', type=int, default=300)
+    parser.add_argument('--batchSz', type=int, default=64)
     parser.add_argument('--nEpochs', type=int, default=50)
+    parser.add_argument('--sEpoch', type=int, default=1)
     parser.add_argument('--no-cuda', action='store_true')
     parser.add_argument('--save')
-    parser.add_argument('--seed', type=int, default=1)
+    parser.add_argument('--seed', type=int, default=50)
     parser.add_argument('--opt', type=str, default='sgd',
                         choices=('sgd', 'adam', 'rmsprop'))
     args = parser.parse_args()
 
     args.cuda = not args.no_cuda and torch.cuda.is_available()
-    args.save = args.save or 'work/densenet.base'
+    args.save = args.save or 'work/densenet.base.collage-23'
     setproctitle.setproctitle(args.save)
 
     torch.manual_seed(args.seed)
     if args.cuda:
         torch.cuda.manual_seed(args.seed)
 
-    if os.path.exists(args.save):
-        shutil.rmtree(args.save)
+    # if os.path.exists(args.save):
+    #     shutil.rmtree(args.save)
     os.makedirs(args.save, exist_ok=True)
 
     normMean = [0.49139968, 0.48215827, 0.44653124]
     normStd = [0.24703233, 0.24348505, 0.26158768]
     normTransform = transforms.Normalize(normMean, normStd)
 
-    trainTransform = transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
+    trainTransform = valTransform = transforms.Compose([
+        transforms.Scale(64),
+        transforms.RandomCrop(56, padding=4),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         normTransform
     ])
     testTransform = transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
+        transforms.Scale(64),
+        transforms.CenterCrop(56),
         transforms.ToTensor(),
         normTransform
     ])
@@ -76,38 +80,43 @@ def main():
     trainLoader = DataLoader(
         OpenImagesDataset(TRAIN_DATA, IMG_PATH, trainTransform),
         batch_size=args.batchSz, shuffle=True, **kwargs)
+    valLoader = DataLoader(
+        OpenImagesDataset(VAL_DATA, IMG_PATH, valTransform),
+        batch_size=args.batchSz, shuffle=True, **kwargs)
     testLoader = DataLoader(
-        OpenImagesDataset(TEST_DATA, IMG_PATH, testTransform),
+        OpenImagesDataset(TEST_DATA, TEST_IMG_PATH, testTransform),
         batch_size=args.batchSz, shuffle=False, **kwargs)
 
     net = densenet.DenseNet(growthRate=12, depth=100, reduction=0.5,
-                            bottleneck=True, nClasses=16)
-
+                            bottleneck=True, nClasses=23)
+    # net = torch.load(os.path.join(args.save, '13.pth'))
+    
     print('  + Number of params: {}'.format(
         sum([p.data.nelement() for p in net.parameters()])))
     if args.cuda:
         net = net.cuda()
 
     if args.opt == 'sgd':
-        optimizer = optim.SGD(net.parameters(), lr=1e-1,
-                            momentum=0.9, weight_decay=1e-4)
+        optimizer = optim.SGD(net.parameters(), lr=1e-1, momentum=0.9, weight_decay=1e-4)
     elif args.opt == 'adam':
         optimizer = optim.Adam(net.parameters(), weight_decay=1e-4)
     elif args.opt == 'rmsprop':
         optimizer = optim.RMSprop(net.parameters(), weight_decay=1e-4)
 
-    trainF = open(os.path.join(args.save, 'train.csv'), 'w')
-    testF = open(os.path.join(args.save, 'test.csv'), 'w')
+    trainF = open(os.path.join(args.save, 'train.csv'), 'a')
+    valF = open(os.path.join(args.save, 'val.csv'), 'a')
+    testF = open(os.path.join(args.save, 'test.csv'), 'a')
 
-    for epoch in range(1, args.nEpochs + 1):
+    for epoch in range(args.sEpoch, args.nEpochs + args.sEpoch):
         adjust_opt(args.opt, optimizer, epoch)
         train(args, epoch, net, trainLoader, optimizer, trainF)
-        # test(args, epoch, net, testLoader, optimizer, testF)
-        torch.save(net, os.path.join(args.save, 'latest.pth'))
+        # val(args, epoch, net, valLoader, optimizer, valF)
         test(args, epoch, net, testLoader, optimizer, testF)
-        os.system('./plot.py {} &'.format(args.save))
+        torch.save(net, os.path.join(args.save, '%d.pth' % epoch))
+        # os.system('./plot.py {} &'.format(args.save))
 
     trainF.close()
+    valF.close()
     testF.close()
 
 def train(args, epoch, net, trainLoader, optimizer, trainF):
@@ -120,51 +129,119 @@ def train(args, epoch, net, trainLoader, optimizer, trainF):
         data, target = Variable(data), Variable(target)
         optimizer.zero_grad()
         output = net(data)
-        # loss = F.nll_loss(output, target)
         loss = F.binary_cross_entropy(output, target)
         # make_graph.save('/tmp/t.dot', loss.creator); assert(False)
         loss.backward()
         optimizer.step()
         nProcessed += len(data)
-        pred = output.data.gt(0.5) # Get the values greater than a threshold
-        # pred = output.data.max(1)[1] # get the index of the max log-probability
-        incorrect = pred.ne(target.data.byte()).cpu().sum()
-        err = 100.*incorrect/(64 * 16) # batch_size * nClasses
+        pred = output.data.gt(thresh)
+        # t_pred = pred.eq(1)
+        # f_pred = pred.eq(0)
+        # print(t_pred)
+        # t = target.data.byte().eq(1)
+        # print(t)
+        # f = target.data.byte().eq(0)
+        tp = (pred + target.data.byte()).eq(2).sum()
+        fp = (pred - target.data.byte()).eq(1).sum()
+        fn = (pred - target.data.byte()).eq(-1).sum()
+        tn = (pred + target.data.byte()).eq(0).sum()
+        # correct = pred.eq(target.data.byte()).cpu().sum()
+        # acc = 100. * correct / (pred.size()[0] * pred.size()[1])
+        acc = (tp + tn) / (tp + tn + fp + fn)
+        try:
+            prec = tp / (tp + fp)
+        except ZeroDivisionError:
+            prec = 0.0
+        try:
+            rec = tp / (tp + fn)
+        except ZeroDivisionError:
+            rec = 0.0
         partialEpoch = epoch + batch_idx / len(trainLoader) - 1
-        # print('Train Epoch: {:.2f} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-        #     partialEpoch, nProcessed, nTrain, 100. * batch_idx / len(trainLoader),
-        #     loss.data[0]))
-        print('Train Epoch: {:.2f} [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tError: {:.6f}'.format(
+        print('Epoch: {:.2f} [{}/{} ({:.0f}%)]\tLoss: {:.4f}\tAcc: {:.4f}\tPrec: {:.4f}\tRec: {:.4f}\tTP: {}\tFP: {}\tFN: {}\tTN: {}'.format(
             partialEpoch, nProcessed, nTrain, 100. * batch_idx / len(trainLoader),
-            loss.data[0], err))
+            loss.data[0], acc, prec, rec, tp, fp, fn, tn))
 
-        trainF.write('{},{},{}\n'.format(partialEpoch, loss.data[0], err))
-        # trainF.write('{},{}\n'.format(partialEpoch, loss.data[0]))
+        trainF.write('{},{},{},{},{}\n'.format(partialEpoch, loss.data[0], acc, prec, rec))
         trainF.flush()
+
+def val(args, epoch, net, valLoader, optimizer, valF):
+    net.eval()
+    best_threshold = max_rec_fpr = 0.0
+    for threshold in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+        val_loss = acc = prec = rec = fpr = 0
+        for data, target in valLoader:
+            if args.cuda:
+                data, target = data.cuda(), target.cuda()
+            data, target = Variable(data, volatile=True), Variable(target)
+            output = net(data)
+            val_loss += F.binary_cross_entropy(output, target).data[0]
+            pred = output.data.gt(threshold)
+            tp = (pred + target.data.byte()).eq(2).sum()
+            fp = (pred - target.data.byte()).eq(1).sum()
+            fn = (pred - target.data.byte()).eq(-1).sum()
+            tn = (pred + target.data.byte()).eq(0).sum()
+            acc += (tp + tn) / (tp + tn + fp + fn)
+            try:
+                prec += tp / (tp + fp)
+                rec += tp / (tp + fn)
+                fpr += fp / (tn + fp)
+            except ZeroDivisionError:
+                pass
+        acc /= len(valLoader)
+        prec /= len(valLoader)
+        rec /= len(valLoader)
+        fpr /= len(valLoader)
+        if rec / fpr > max_rec_fpr:
+            max_rec_fpr = rec / fpr
+            best_threshold = threshold
+        print('(Threshold={:.1f}): Loss: {:.4f}, Acc: {:.4f}, Prec: {:.4f}, Rec: {:.4f}, FPR: {:.4f}, TP: {}, FP: {}, FN: {}, TN: {}'.format(
+            threshold, val_loss, acc, prec, rec, fpr, tp, fp, fn, tn))
+
+    print('Setting threshold to %.2f' % best_threshold)
+    # global thresh
+    thresh = best_threshold
+    valF.write('{},{},{},{},{},{}\n'.format(epoch, best_threshold, val_loss, acc, prec, rec))
+    valF.flush()
 
 def test(args, epoch, net, testLoader, optimizer, testF):
     net.eval()
     test_loss = 0
-    incorrect = 0
+    # correct = 0
+    acc = prec = rec = 0
     for data, target in testLoader:
         if args.cuda:
             data, target = data.cuda(), target.cuda()
         data, target = Variable(data, volatile=True), Variable(target)
         output = net(data)
-        # test_loss += F.nll_loss(output, target).data[0]
         test_loss += F.binary_cross_entropy(output, target).data[0]
-        # pred = output.data.max(1)[1] # get the index of the max log-probability
-        pred = output.data.gt(0.5) # Get the values greater than a threshold
-        incorrect += pred.ne(target.data.byte()).cpu().sum()
+        pred = output.data.gt(thresh)
+        # correct += pred.eq(target.data.byte()).cpu().sum()
+        tp = (pred + target.data.byte()).eq(2).sum()
+        fp = (pred - target.data.byte()).eq(1).sum()
+        fn = (pred - target.data.byte()).eq(-1).sum()
+        tn = (pred + target.data.byte()).eq(0).sum()
+        # correct = pred.eq(target.data.byte()).cpu().sum()
+        # acc = 100. * correct / (pred.size()[0] * pred.size()[1])
+        acc += (tp + tn) / (tp + tn + fp + fn)
+        try:
+            prec += tp / (tp + fp)
+        except ZeroDivisionError:
+            prec += 0.0
+        try:
+            rec += tp / (tp + fn)
+        except ZeroDivisionError:
+            rec += 0.0
 
-    test_loss = test_loss
     test_loss /= len(testLoader) # loss function already averages over batch size
-    nTotal = len(testLoader.dataset) * 16
-    err = 100.*incorrect/nTotal
-    print('\nTest set: Average loss: {:.4f}, Error: {}/{} ({:.0f}%)\n'.format(
-        test_loss, incorrect, nTotal, err))
+    # nTotal = len(testLoader.dataset) * 11
+    # acc = 100. * correct/nTotal
+    acc /= len(testLoader)
+    prec /= len(testLoader)
+    rec /= len(testLoader)
+    print('\nTest set: Loss: {:.4f}, Acc: {:.4f}, Prec: {:.4f}, Rec: {:.4f}\n'.format(
+        test_loss, acc, prec, rec))
 
-    testF.write('{},{},{}\n'.format(epoch, test_loss, err))
+    testF.write('{},{},{},{},{}\n'.format(epoch, test_loss, acc, prec, rec))
     testF.flush()
 
 def adjust_opt(optAlg, optimizer, epoch):
