@@ -6,7 +6,7 @@ import os
 import pandas as pd
 import torch
 
-class OpenImagesDataset(Dataset):
+class MultiLabelDataset(Dataset):
     def __init__(self, csv_path, img_path, transform=None):
         tmp_df = pd.read_csv(csv_path)
         

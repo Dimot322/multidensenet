@@ -57,9 +57,9 @@ class Transition(nn.Module):
         return out
 
 
-class DenseNet(nn.Module):
+class DenseNetBase(nn.Module):
     def __init__(self, growthRate, depth, reduction, nClasses, bottleneck):
-        super(DenseNet, self).__init__()
+        super(DenseNetBase, self).__init__()
 
         nDenseBlocks = (depth-4) // 3
         if bottleneck:
@@ -112,7 +112,26 @@ class DenseNet(nn.Module):
         out = self.trans2(self.dense2(out))
         out = self.dense3(out)
         out = torch.squeeze(F.avg_pool2d(F.relu(self.bn1(out)), 8))
-        out = out.view([out.size()[0], -1])
-        out = self.fc(out)
-        out = F.sigmoid(out)
-        return out
+        # out = out.view([out.size()[0], -1])
+        return self.fc(out)
+
+class DenseNet121(nn.Module):
+    def __init__(self, num_classes, pretrained):
+        super(DenseNet121, self).__init__()
+        net = models.densenet.densenet121(pretrained=pretrained)
+        self.features = net.features
+        self.classifier = nn.Linear(1024, num_classes)
+
+    def forward(self, x):
+        features = self.features(x)
+        out = F.relu(features, inplace=True)
+        out = F.avg_pool2d(out, kernel_size=7).view(features.size(0), -1)
+        return self.classifier(out)
+
+class DenseNet100(models.densenet.DenseNet):
+    def __init__(self, num_classes):
+        super(DenseNet100, self).__init__(growth_rate=12, block_config=(16, 16, 16), num_init_features=24, bn_size=3, drop_rate=0.5, num_classes=num_classes)
+    
+    def forward(self, x):
+        out = torch.squeeze(F.avg_pool2d(F.relu(self.features(x)), 8))
+        return self.classifier(out)
