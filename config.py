@@ -13,12 +13,20 @@ def get_loss_function(multilabel):
     return F.cross_entropy
 
 def get_dataset(name, partition, transform):
+    image_folder_datasets = ['imagenet', 'food-101']
     image_dir = os.path.join('input', '%s-%s' % (name, partition))
-    if name == 'imagenet':
-        return datasets.ImageFolder(image_dir, transform)
+    if name in image_folder_datasets:
+        dataset = datasets.ImageFolder(image_dir, transform)
+    elif name == 'cifar10':
+        if partition == 'train':
+            train = True
+        elif partition == 'test':
+            train = False
+        dataset = datasets.CIFAR10(root='cifar', train=train, download=True, transform=transform)
     elif name == 'food-collage':
         csv_path = os.path.join('input', '%s-%s.csv' % (name, partition))
-        return MultiLabelDataset(csv_path, image_dir, transform) 
+        dataset = MultiLabelDataset(csv_path, image_dir, transform)
+    return dataset
 
 def get_network(name, num_classes, pretrained):
     if name == 'densenet-base':

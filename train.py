@@ -29,6 +29,7 @@ def main():
     parser.add_argument('-c', '--num-classes', type=int, required=True)
     parser.add_argument('-m', '--multilabel', type=bool, default=False)
     parser.add_argument('-p', '--pretrained', type=bool, default=False)
+    parser.add_argument('-l', '--load')
     parser.add_argument('--batchSz', type=int, default=64)
     parser.add_argument('--nEpochs', type=int, default=300)
     parser.add_argument('--sEpoch', type=int, default=1)
@@ -69,7 +70,7 @@ def main():
         normTransform
     ])
 
-    kwargs = {'num_workers': 2, 'pin_memory': True} if args.cuda else {}
+    kwargs = {'num_workers': 6, 'pin_memory': True} if args.cuda else {}
     trainLoader = DataLoader(
         config.get_dataset(args.dataset_name, 'train', trainTransform),
         batch_size=args.batchSz, shuffle=True, **kwargs)
@@ -77,11 +78,16 @@ def main():
         config.get_dataset(args.dataset_name, 'test', testTransform),
         batch_size=args.batchSz, shuffle=False, **kwargs)
 
-    # net = torch.load(os.path.join(args.save, '13.pth'))
-    net = config.get_network(args.network_name, args.num_classes, args.pretrained)
-
-    print('  + Number of params: {}'.format(
-        sum([p.data.nelement() for p in net.parameters()])))
+    if args.load:
+        print("Loading network: {}".format(args.load))
+        net = torch.load(args.load)
+    else:
+        net = config.get_network(args.network_name, args.num_classes, args.pretrained)
+    
+    if True: # make this an optional
+        net = torch.nn.DataParallel(net)
+    
+    print('  + Number of params: {}'.format(sum([p.data.nelement() for p in net.parameters()])))
     if args.cuda:
         net = net.cuda().half()
 
@@ -195,6 +201,8 @@ def test(args, epoch, net, testLoader, optimizer, testF):
             test_loss, acc, prec, rec))
         testF.write('{},{},{},{},{}\n'.format(epoch, test_loss, acc, prec, rec))
     else:
+        nTotal = len(testLoader.dataset)
+        err = 100. * incorrect / nTotal
         print('\nTest set: Average loss: {:.4f}, Error: {}/{} ({:.0f}%)\n'.format(
         test_loss, incorrect, nTotal, err))
         testF.write('{},{},{}\n'.format(epoch, test_loss, err))

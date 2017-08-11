@@ -44,6 +44,10 @@ with open(train_file, 'r') as csvfile:
                     rows += 1
                 else:
                     print('%d\t%.6f\t%.6f' % (i + 1, loss / rows, err / rows))
+                    i += 1
+                    loss = float(row[1])
+                    err = float(row[2])
+                    rows = 1
             print('%d\t%.6f\t%.6f' % (i + 1, loss / rows, err / rows))
 
 with open(test_file, 'r') as csvfile:
